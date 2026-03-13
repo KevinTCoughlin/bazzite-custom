@@ -9,6 +9,9 @@ FROM ghcr.io/ublue-os/bazzite-dx:stable
 RUN rpm-ostree override remove code && \
     rpm-ostree cleanup -m
 
+# Add third-party repos for packages not in Fedora
+COPY repos/ /etc/yum.repos.d/
+
 # Install layered packages
 RUN rpm-ostree install \
     gamemode \
