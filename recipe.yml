@@ -1,0 +1,29 @@
+# BlueBuild recipe — custom Bazzite image
+# Build: bluebuild build ./recipe.yml
+# Or push to GitHub and let GitHub Actions build it
+# Then rebase: rpm-ostree rebase ostree-image-signed:docker://ghcr.io/<user>/bazzite-custom:latest
+
+name: bazzite-custom
+description: Personal Bazzite DX image with layered packages baked in
+
+# Base image
+base-image: ghcr.io/ublue-os/bazzite-dx
+image-version: stable
+
+# RPM packages to install (replaces manual rpm-ostree install)
+modules:
+  - type: rpm-ostree
+    install:
+      - gamemode
+      - kmail
+      - nextdns
+      - tlp
+      - wezterm
+    remove:
+      - code  # VS Code RPM from base — using Flatpak/Insiders instead
+
+  # Enable systemd services
+  - type: systemd
+    system:
+      enabled:
+        - tlp.service

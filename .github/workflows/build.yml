@@ -1,0 +1,38 @@
+name: Build Custom Bazzite Image
+
+on:
+  # Build weekly and on push
+  schedule:
+    - cron: "0 9 * * 1" # Monday 9am UTC
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  IMAGE_NAME: bazzite-custom
+  IMAGE_REGISTRY: ghcr.io/${{ github.repository_owner }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build image
+        run: podman build -t ${{ env.IMAGE_NAME }} .
+
+      - name: Push to GHCR
+        run: |
+          podman tag ${{ env.IMAGE_NAME }} ${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+          podman push ${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAME }}:latest
