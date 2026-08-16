@@ -1,127 +1,114 @@
 # bazzite-custom
 
-Custom [Bazzite DX](https://bazzite.gg) image with layered packages baked in, so rebases (e.g. Fedora version upgrades) carry everything automatically.
+Personal Bazzite DX image with OS packages layered into the image so they survive
+rebases and Fedora upgrades.
 
-## What's included
+## Contents
 
-**Base:** `ghcr.io/ublue-os/bazzite-dx:stable`
+The image is based on `ghcr.io/ublue-os/bazzite-dx:stable` and adds `gamemode`,
+`kmail`, `nextdns`, and `wezterm`. It removes the `code` RPM because VS Code is
+managed separately. Bazzite's existing tuned power-management stack is retained;
+TLP is intentionally not layered because it conflicts with `tuned-ppd`.
 
-**Added packages:**
-- `gamemode` — on-demand game performance optimizer
-- `kmail` — KDE email client
-- `nextdns` — DNS-over-TLS/HTTPS client
-- `tlp` — battery/power management
-- `wezterm` — GPU-accelerated terminal
+The `Containerfile` is the only image definition. User configuration, Homebrew
+packages, runtimes, and Flatpaks remain outside this repository.
 
-**Removed from base:**
-- `code` — VS Code RPM (using Flatpak/Insiders instead)
+## Trust and update model
 
-## Architecture
+- The Bazzite base is pinned by digest. Dependabot proposes weekly digest updates.
+- GitHub Actions are pinned to commit SHAs and updated by Dependabot.
+- The unsigned NextDNS RPM is pinned by version and SHA-256.
+- WezTerm nightly is pinned by RPM version; its COPR signing key is vendored and
+  checked by fingerprint.
+- A read-only CI job builds and tests pull requests without persisted checkout
+  or registry credentials.
+- A separate trusted job handles main, scheduled, and manual publishing. It
+  publishes immutable `sha-<commit>-run-<run>-<attempt>` rollback tags plus the
+  rolling UTC date and `latest` tags, then attaches provenance attestations.
 
-The workstation is built in layers, each managed by a different tool:
+Review base-image, NextDNS, and WezTerm pin updates independently. A Fedora major
+base update may require a matching WezTerm build before merging.
 
-| Layer | Tool | Repo / Source |
-|-------|------|---------------|
-| **OS packages** | rpm-ostree (this image) | `KevinTCoughlin/bazzite-custom` |
-| **Dotfiles & shell config** | chezmoi | `KevinTCoughlin/dotfiles` |
-| **CLI tools** | Homebrew (Linuxbrew) | Brewfile / manual |
-| **Runtimes** | mise | `.tool-versions` / global config |
-| **Desktop apps** | Flatpak | `flatpak list` |
+## Rebase
 
-This repo handles the OS layer. Everything else lives in the [dotfiles repo](https://github.com/KevinTCoughlin/dotfiles) or is installed via the steps below.
-
-## Usage
-
-### Rebase to this image
-
-```bash
-rpm-ostree rebase ostree-image-signed:docker://ghcr.io/kevintcoughlin/bazzite-custom:latest
-systemctl reboot
-```
-
-### Full workstation setup
-
-After rebasing to the custom image on a fresh machine, complete the user-layer setup:
+First record the current deployment so it is available for rollback:
 
 ```bash
-# 1. Install chezmoi and apply dotfiles
-sh -c "$(curl -fsLS get.chezmoi.io)" -- init --apply KevinTCoughlin
-
-# 2. Install Homebrew (Linuxbrew)
-/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
-
-# 3. Install brew formulae
-brew bundle --file=~/.Brewfile  # if chezmoi provides a Brewfile, or install manually
-
-# 4. Install runtimes via mise
-mise install
-
-# 5. Install Flatpak apps
-# Re-install from a saved list, or manually add what you need
-# flatpak install flathub $(cat flatpak-apps.txt)
-
-# 6. Reload systemd for any quadlet units or timers from dotfiles
-systemctl --user daemon-reload
+rpm-ostree status
 ```
 
-### Revert to stock Bazzite
+This repository does not configure an rpm-ostree container-signing policy.
+Verify the GitHub provenance attestation, then rebase by immutable digest:
 
 ```bash
-rpm-ostree rebase ostree-image-signed:docker://ghcr.io/ublue-os/bazzite-dx:stable
-systemctl reboot
+gh attestation verify \
+  oci://ghcr.io/kevintcoughlin/bazzite-custom@sha256:<digest> \
+  --repo KevinTCoughlin/bazzite-custom
+
+sudo rpm-ostree rebase \
+  ostree-unverified-registry:ghcr.io/kevintcoughlin/bazzite-custom@sha256:<digest>
+sudo systemctl reboot
 ```
 
-## Development
-
-### Prerequisites
-
-- [Podman](https://podman.io/) (or Docker)
-- A GitHub account with [GHCR access](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry)
-
-### Clone
+After reboot, keep the previous deployment until the new one is confirmed:
 
 ```bash
-git clone https://github.com/KevinTCoughlin/bazzite-custom.git
-cd bazzite-custom
+rpm-ostree status
 ```
 
-### Build locally
+To undo the pending or current deployment, use `sudo rpm-ostree rollback` and
+reboot. To leave the custom image entirely:
 
 ```bash
-podman build -t bazzite-custom .
+sudo rpm-ostree rebase \
+  ostree-image-signed:docker://ghcr.io/ublue-os/bazzite-dx:stable
+sudo systemctl reboot
 ```
 
-### Push to GHCR manually
+## Local development
+
+Requirements: Podman, Bash, GnuPG, and ShellCheck.
 
 ```bash
-podman login ghcr.io
-podman tag bazzite-custom ghcr.io/kevintcoughlin/bazzite-custom:latest
-podman push ghcr.io/kevintcoughlin/bazzite-custom:latest
+./tests/validate.sh
+shellcheck tests/validate.sh
+
+source_date_epoch="$(git show -s --format=%ct HEAD)"
+podman build \
+  --pull=always \
+  --timestamp "${source_date_epoch}" \
+  --build-arg "IMAGE_REVISION=$(git rev-parse HEAD)" \
+  --tag bazzite-custom .
 ```
 
-### Automated builds
+Test the result without booting it:
 
-A GitHub Actions workflow builds and pushes the image automatically:
-- Weekly (Monday 9am UTC)
-- On every push to `main`
-- On manual dispatch
-
-## Files
-
-| File | Purpose |
-|------|---------|
-| `Containerfile` | Podman/Docker build definition |
-| `repos/` | Third-party RPM repo files (nextdns, wezterm) copied into the image |
-| `recipe.yml` | [BlueBuild](https://blue-build.org/) declarative recipe (alternative to Containerfile) |
-| `.github/workflows/build.yml` | CI pipeline for automated image builds |
-
-## Customizing
-
-Edit the `Containerfile` to add/remove packages, then push to trigger a rebuild:
-
-```dockerfile
-RUN rpm-ostree install <your-package> && rpm-ostree cleanup -m
+```bash
+podman run --rm --entrypoint /usr/bin/rpm bazzite-custom \
+  -q gamemode kmail nextdns wezterm
 ```
 
-Or edit `recipe.yml` if using BlueBuild.
+Publishing is intentionally performed only by GitHub Actions.
+
+### Configure NextDNS
+
+The image supplies a systemd unit but deliberately does not bake a private
+NextDNS profile ID into a public image. Configure it after deployment, then
+enable the service:
+
+```bash
+sudo nextdns config set -profile <profile-id>
+sudo systemctl enable --now nextdns.service
+nextdns status
+```
+
+## Repository layout
+
+| Path | Purpose |
+|---|---|
+| `Containerfile` | Canonical image definition and package pins |
+| `repos/` | WezTerm repository configuration and reviewed signing key |
+| `systemd/nextdns.service` | Deterministic NextDNS service integration |
+| `tests/validate.sh` | Fast supply-chain and workflow policy checks |
+| `.github/workflows/build.yml` | Build, test, publish, and attest workflow |
+| `.github/dependabot.yml` | Automated base-image and Actions update proposals |

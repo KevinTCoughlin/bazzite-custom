@@ -1,43 +1,178 @@
-name: Build Custom Bazzite Image
+name: Build custom Bazzite image
 
 on:
-  # Build weekly and on push
-  schedule:
-    - cron: "0 9 * * 1" # Monday 9am UTC
+  pull_request:
   push:
     branches: [main]
+  schedule:
+    - cron: "0 9 * * 1"
   workflow_dispatch:
+
+concurrency:
+  group: image-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
 
 env:
   IMAGE_NAME: bazzite-custom
-  IMAGE_REGISTRY: ghcr.io
 
 jobs:
-  build:
-    runs-on: ubuntu-latest
+  validate:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
     permissions:
       contents: read
+
+    steps:
+      - name: Check out repository without credentials
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Run static validation
+        run: |
+          shellcheck tests/validate.sh
+          ./tests/validate.sh
+
+      - name: Prepare image metadata
+        id: metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          short_sha="${GITHUB_SHA:0:12}"
+          {
+            echo "local_image=localhost/${IMAGE_NAME}:${short_sha}"
+            echo "source_date_epoch=$(git show -s --format=%ct "${GITHUB_SHA}")"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Build image
+        env:
+          LOCAL_IMAGE: ${{ steps.metadata.outputs.local_image }}
+          SOURCE_DATE_EPOCH: ${{ steps.metadata.outputs.source_date_epoch }}
+        run: |
+          podman build \
+            --pull=always \
+            --timestamp "${SOURCE_DATE_EPOCH}" \
+            --build-arg "IMAGE_REVISION=${GITHUB_SHA}" \
+            --tag "${LOCAL_IMAGE}" \
+            .
+
+      - name: Test built image
+        env:
+          LOCAL_IMAGE: ${{ steps.metadata.outputs.local_image }}
+        run: |
+          podman run --rm --entrypoint /usr/bin/rpm "${LOCAL_IMAGE}" \
+            -q gamemode kmail nextdns wezterm
+          if podman run --rm --entrypoint /usr/bin/rpm "${LOCAL_IMAGE}" -q code; then
+            echo "The removed code RPM is still installed" >&2
+            exit 1
+          fi
+          podman run --rm --entrypoint /usr/bin/nextdns "${LOCAL_IMAGE}" version
+          podman run --rm --entrypoint /usr/bin/systemd-analyze "${LOCAL_IMAGE}" \
+            verify /usr/lib/systemd/system/nextdns.service
+
+  publish:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      attestations: write
+      contents: read
+      id-token: write
       packages: write
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Check out repository without credentials
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
 
-      - name: Set IMAGE_REGISTRY with lowercased owner
+      - name: Run static validation
         run: |
-          OWNER_LC="${GITHUB_REPOSITORY_OWNER,,}"
-          echo "IMAGE_REGISTRY=ghcr.io/${OWNER_LC}" >> "$GITHUB_ENV"
+          shellcheck tests/validate.sh
+          ./tests/validate.sh
+
+      - name: Prepare image metadata
+        id: metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          short_sha="${GITHUB_SHA:0:12}"
+          {
+            echo "image=ghcr.io/${owner}/${IMAGE_NAME}"
+            echo "local_image=localhost/${IMAGE_NAME}:${short_sha}"
+            echo "rollback_tag=sha-${short_sha}-run-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+            echo "date_tag=$(date --utc +%Y%m%d)"
+            echo "source_date_epoch=$(git show -s --format=%ct "${GITHUB_SHA}")"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Build image
+        env:
+          LOCAL_IMAGE: ${{ steps.metadata.outputs.local_image }}
+          SOURCE_DATE_EPOCH: ${{ steps.metadata.outputs.source_date_epoch }}
+        run: |
+          podman build \
+            --pull=always \
+            --timestamp "${SOURCE_DATE_EPOCH}" \
+            --build-arg "IMAGE_REVISION=${GITHUB_SHA}" \
+            --tag "${LOCAL_IMAGE}" \
+            .
+
+      - name: Test built image
+        env:
+          LOCAL_IMAGE: ${{ steps.metadata.outputs.local_image }}
+        run: |
+          podman run --rm --entrypoint /usr/bin/rpm "${LOCAL_IMAGE}" \
+            -q gamemode kmail nextdns wezterm
+          if podman run --rm --entrypoint /usr/bin/rpm "${LOCAL_IMAGE}" -q code; then
+            echo "The removed code RPM is still installed" >&2
+            exit 1
+          fi
+          podman run --rm --entrypoint /usr/bin/nextdns "${LOCAL_IMAGE}" version
+          podman run --rm --entrypoint /usr/bin/systemd-analyze "${LOCAL_IMAGE}" \
+            verify /usr/lib/systemd/system/nextdns.service
 
       - name: Log in to GHCR
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build image
-        run: podman build -t ${{ env.IMAGE_NAME }} .
-
-      - name: Push to GHCR
+      - name: Push immutable and rolling tags
+        id: push
+        env:
+          DATE_TAG: ${{ steps.metadata.outputs.date_tag }}
+          IMAGE: ${{ steps.metadata.outputs.image }}
+          LOCAL_IMAGE: ${{ steps.metadata.outputs.local_image }}
+          ROLLBACK_TAG: ${{ steps.metadata.outputs.rollback_tag }}
         run: |
-          podman tag ${{ env.IMAGE_NAME }} ${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAME }}:latest
-          podman push ${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+          set -euo pipefail
+          for tag in "${ROLLBACK_TAG}" "${DATE_TAG}" latest; do
+            podman tag "${LOCAL_IMAGE}" "${IMAGE}:${tag}"
+            if [[ "${tag}" == "${ROLLBACK_TAG}" ]]; then
+              podman push --digestfile image-digest "${IMAGE}:${tag}"
+            else
+              podman push "${IMAGE}:${tag}"
+            fi
+          done
+          digest="$(<image-digest)"
+          echo "digest=${digest}" >> "${GITHUB_OUTPUT}"
+          {
+            echo "### Published image"
+            echo
+            echo "\`${IMAGE}@${digest}\`"
+            echo
+            echo "Immutable rollback tag: \`${IMAGE}:${ROLLBACK_TAG}\`"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@96278af6caaf10aea03fd8d33a09a777ca52d62f # v3.2.0
+        with:
+          subject-name: ${{ steps.metadata.outputs.image }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
