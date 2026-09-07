@@ -18,16 +18,19 @@ packages, runtimes, and Flatpaks remain outside this repository.
 - The Bazzite base is pinned by digest. Dependabot proposes weekly digest updates.
 - GitHub Actions are pinned to commit SHAs and updated by Dependabot.
 - The unsigned NextDNS RPM is pinned by version and SHA-256.
-- WezTerm nightly is pinned by RPM version; its COPR signing key is vendored and
-  checked by fingerprint.
+- WezTerm comes from the upstream nightly COPR, whose signing key is vendored and
+  checked by fingerprint. That repository only keeps recent builds, so the image
+  layers the newest published nightly by default. Pass
+  `--build-arg WEZTERM_VERSION=<build id>` to reproduce an earlier build while it
+  is still published.
 - A read-only CI job builds and tests pull requests without persisted checkout
   or registry credentials.
 - A separate trusted job handles main, scheduled, and manual publishing. It
   publishes immutable `sha-<commit>-run-<run>-<attempt>` rollback tags plus the
   rolling UTC date and `latest` tags, then attaches provenance attestations.
 
-Review base-image, NextDNS, and WezTerm pin updates independently. A Fedora major
-base update may require a matching WezTerm build before merging.
+Review base-image and NextDNS pin updates independently. A Fedora major base
+update may require a matching WezTerm build before merging.
 
 ## Rebase
 
