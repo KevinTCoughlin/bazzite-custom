@@ -15,6 +15,13 @@ grep -Eq '^FROM ghcr\.io/ublue-os/bazzite-dx:stable@sha256:[0-9a-f]{64}$' Contai
 grep -Eq '^ARG NEXTDNS_SHA256=[0-9a-f]{64}$' Containerfile \
   || fail "the unsigned NextDNS RPM must have a pinned checksum"
 
+grep -Eq '^ARG WEZTERM_VERSION="([0-9]{8}_[0-9]{6}_[0-9a-f]+)?"$' Containerfile \
+  || fail "the WezTerm pin must be empty or an exact nightly build identifier"
+
+grep -Fq 'wezterm_packages="wezterm wezterm-common wezterm-gui wezterm-mux-server"' \
+  Containerfile \
+  || fail "the WezTerm subpackages must be layered as one consistent set"
+
 grep -Fq 'skip_if_unavailable=False' repos/wezterm-nightly.repo \
   || fail "the WezTerm repository must fail closed"
 grep -Fq 'gpgcheck=1' repos/wezterm-nightly.repo \
