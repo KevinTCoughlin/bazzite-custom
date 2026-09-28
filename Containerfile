@@ -1,4 +1,4 @@
-FROM ghcr.io/ublue-os/bazzite-dx:stable@sha256:fb61306e5e7b27b2ba7b6fecc2836a05fe4e9ff9faf365b1de308f6e550f4152
+FROM ghcr.io/ublue-os/bazzite-dx:stable@sha256:4593947406ab9c714dd4c210ed2711c4b5bfeb58b3a56530f02982e6c00c4d18
 
 ARG IMAGE_REVISION=unknown
 ARG NEXTDNS_VERSION=1.47.3
