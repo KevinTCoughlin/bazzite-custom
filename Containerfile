@@ -20,7 +20,7 @@ COPY systemd/nextdns.service /usr/lib/systemd/system/nextdns.service
 RUN set -eu \
     && curl --fail --location --retry 3 \
       --output /nextdns.rpm \
-      "https://repo.nextdns.io/rpm/nextdns_${NEXTDNS_VERSION}_x86_64.rpm" \
+      "https://github.com/nextdns/nextdns/releases/download/v${NEXTDNS_VERSION}/nextdns_${NEXTDNS_VERSION}_linux_amd64.rpm" \
     && test "$(sha256sum /nextdns.rpm)" = "${NEXTDNS_SHA256}  /nextdns.rpm" \
     && wezterm_packages="wezterm wezterm-common wezterm-gui wezterm-mux-server" \
     && if [ -n "${WEZTERM_VERSION}" ]; then \
