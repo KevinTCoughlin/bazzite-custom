@@ -17,6 +17,9 @@ COPY repos/wezterm-nightly.repo /etc/yum.repos.d/wezterm-nightly.repo
 COPY repos/keys/RPM-GPG-KEY-wezterm-nightly /etc/pki/rpm-gpg/RPM-GPG-KEY-wezterm-nightly
 COPY systemd/nextdns.service /usr/lib/systemd/system/nextdns.service
 
+# NextDNS ships unsigned RPMs and RPM 6 verifies every package by default.
+# The download is pinned by SHA-256, so dnf skips the OpenPGP check for that
+# one local file only; repo packages still go through rpm-ostree with gpgcheck.
 RUN set -eu \
     && curl --fail --location --retry 3 \
       --output /nextdns.rpm \
@@ -31,8 +34,8 @@ RUN set -eu \
          wezterm_packages="${pinned_packages}" ; \
        fi \
     && rpm-ostree override remove code \
+    && dnf -y install --nogpgcheck /nextdns.rpm \
     && rpm-ostree install \
-      /nextdns.rpm \
       gamemode \
       kmail \
       ${wezterm_packages} \
