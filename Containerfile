@@ -1,4 +1,4 @@
-FROM ghcr.io/ublue-os/bazzite-dx:stable@sha256:0ac5c571ff89542f1522e2623ecb264489dfd8f487e9ba1d137c66e27429baf1
+FROM ghcr.io/ublue-os/bazzite-dx:stable@sha256:ea250d03962fdbbfb8f86584e27edec856f282a059ff538221e83fc6dec4713f
 
 ARG IMAGE_REVISION=unknown
 ARG NEXTDNS_VERSION=1.47.3
@@ -18,8 +18,11 @@ COPY repos/keys/RPM-GPG-KEY-wezterm-nightly /etc/pki/rpm-gpg/RPM-GPG-KEY-wezterm
 COPY systemd/nextdns.service /usr/lib/systemd/system/nextdns.service
 
 # NextDNS ships unsigned RPMs and RPM 6 verifies every package by default.
-# The download is pinned by SHA-256, so dnf skips the OpenPGP check for that
-# one local file only; repo packages still go through rpm-ostree with gpgcheck.
+# The download is pinned by SHA-256, so dnf5 skips the OpenPGP check for that
+# one local file only. Repository packages still install with gpgcheck enabled.
+# dnf5 is required here: the bootc base is not a libostree-booted host, so
+# rpm-ostree override and install fail during the container build. This matches
+# the Universal Blue image-template, which customizes images with dnf5.
 RUN set -eu \
     && curl --fail --location --retry 3 \
       --output /nextdns.rpm \
@@ -33,18 +36,22 @@ RUN set -eu \
          done ; \
          wezterm_packages="${pinned_packages}" ; \
        fi \
-    && rpm-ostree override remove code \
-    && dnf -y install --nogpgcheck /nextdns.rpm \
-    && rpm-ostree install \
+    && dnf5 -y remove code \
+    && dnf5 -y install --nogpgcheck /nextdns.rpm \
+    && dnf5 -y install \
       gamemode \
       kmail \
       ${wezterm_packages} \
     && rpm -q wezterm wezterm-common wezterm-gui wezterm-mux-server \
     && rm --force /nextdns.rpm \
-    && rpm-ostree cleanup -m
+    && dnf5 clean all \
+    && rm --force /var/log/dnf5.log /var/log/dnf5.log.*
 
 RUN rm --force /etc/init.d/nextdns \
     && chmod 0644 \
       /etc/pki/rpm-gpg/RPM-GPG-KEY-wezterm-nightly \
       /etc/yum.repos.d/wezterm-nightly.repo \
       /usr/lib/systemd/system/nextdns.service
+
+# Verify the final bootc image, matching the Universal Blue image-template.
+RUN bootc container lint
